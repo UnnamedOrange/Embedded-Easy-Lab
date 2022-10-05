@@ -13,6 +13,7 @@ SOURCES += \
     main_window.cpp
 
 HEADERS += \
+    guess_server.hpp \
     main_window.h
 
 FORMS += \
