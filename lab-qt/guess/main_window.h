@@ -19,10 +19,14 @@ private:
 public:
     main_window(QWidget* parent = nullptr);
 
+private:
+    void print(const QString& text);
+
 private slots:
     void on_button_guess_clicked();
     void on_button_new_clicked();
     void on_button_quit_clicked();
+    void on_lineEdit_returnPressed();
 
 private slots:
     void _on_history_appended(const QString& item);
