@@ -7,6 +7,7 @@
 #include <linux/ioctl.h>
 #include <linux/module.h>
 #include <linux/sched.h>
+#include <linux/slab.h>
 
 #pragma region Configurations
 MODULE_LICENSE("MIT");
@@ -21,15 +22,11 @@ MODULE_DESCRIPTION("GPIO driver for Raspberry Pi 3");
 #pragma endregion
 
 #pragma region Global Variables
-static int gpio_open(struct inode*, struct file*);
-static int gpio_release(struct inode*, struct file*);
-static ssize_t gpio_write(struct file*, const char*, size_t, loff_t*);
+static ssize_t gpio_write(struct file*, const char __user*, size_t, loff_t*);
 
 static dev_t device_id;
 static struct file_operations gpio_fops = {
     .owner = THIS_MODULE,
-    .open = gpio_open,
-    .release = gpio_release,
     .write = gpio_write,
 };
 static struct cdev* gpio_cdev; // Character device.
@@ -58,11 +55,11 @@ static void ke_gpio_select_function(int pin, int function)
     uint32_t mask = ~(0b111 << bit);
     uint32_t new_value =
         (old_value & mask) | (function << bit); // Function is valid.
-    printk(KERN_INFO "GPIO: Select function for %d (register %x -> %x)\n", pin,
-           old_value, new_value);
 
     // Write the new value.
     remapped_gpio_base->GPFSEL[register_index] = new_value;
+    printk(KERN_INFO "GPIO: Select function for %d (register %x -> %x)\n", pin,
+           old_value, new_value);
 }
 static void ke_gpio_set_output(int pin, bool is_set)
 {
@@ -70,27 +67,55 @@ static void ke_gpio_set_output(int pin, bool is_set)
     int register_index = pin / 32; // 32 pins per register.
     int bit = pin % 32;            // Use 1 << bit.
 
-    // TODO: Write the output.
+    // Write the output.
+    if (is_set)
+        remapped_gpio_base->GPSET[register_index] = 1ul << bit;
+    else
+        remapped_gpio_base->GPCLR[register_index] = 1ul << bit;
+    printk(KERN_INFO "GPIO: Set output for %d (value %d)\n", pin, is_set);
 }
 #pragma endregion
 
 #pragma region File Operations
-static int gpio_open(struct inode* inode, struct file* file)
+static ssize_t gpio_write(struct file* file, const char __user* buf,
+                          size_t count, loff_t* ppos)
 {
+    // Copy the data from user space.
+    unsigned char* kbuf = kmalloc(count, GFP_KERNEL);
+    if (!kbuf)
+        return -ENOMEM;
+    if (0 != copy_from_user(kbuf, buf, count))
+    {
+        kfree(kbuf);
+        return -EFAULT;
+    }
 
-    printk(KERN_INFO "GPIO: Opened.\n");
-    return 0;
-}
-static int gpio_release(struct inode* inode, struct file* file)
-{
-    printk(KERN_INFO "GPIO: Closed.\n");
-    return 0;
-}
-static ssize_t gpio_write(struct file* file, const char* buf, size_t count,
-                          loff_t* ppos)
-{
+    // Parse the command.
+    int pin = 0;
+    int value = 0;
+    if (2 != sscanf(kbuf, "%d=%d", &pin, &value))
+    {
+        kfree(kbuf);
+        return -EINVAL;
+    }
+    if (pin < 0 || pin >= 54)
+    {
+        kfree(kbuf);
+        return -EINVAL;
+    }
+    if (value != 0 && value != 1)
+    {
+        kfree(kbuf);
+        return -EINVAL;
+    }
+    ke_gpio_select_function(pin, 1);
+    ke_gpio_set_output(pin, value);
+
+    // Free the buffer.
+    kfree(kbuf);
+
     printk(KERN_INFO "GPIO: Written.\n");
-    return 0;
+    return count;
 }
 #pragma endregion
 
